@@ -137,31 +137,31 @@ abstract class Generator
 	 */
 	protected function processRoute($route)
 	{
-		$routeAction = $route->getAction();
+		$action = $route->getAction();
 
-		$this->getParentCommand()->info('Processing route [' . implode('/', $route->methods()) . '] ' . $routeAction['uri']);
+		$this->getParentCommand()->info('Processing route [' . implode('/', $route->methods()) . '] ' . $action['uri']);
 
-		$routeControllerDocBlock = $this->getRouteControllerDocBlock($route);
-		$routeControllerOperationTags = $this->getDocBlockOperationTags($routeControllerDocBlock);
+		$controllerDocBlock = $this->getRouteControllerDocBlock($route);
+		$controllerOperationTags = $this->getDocBlockOperationTags($controllerDocBlock);
 
 		foreach ($route->methods() as $httpMethod) {
 			// Ignore HEAD
 
-			if (strtolower($httpMethod) == 'head') {
+			if (strtolower($httpMethod) === 'head') {
 				continue;
 			}
 
-			if (isset($this->openAPI->paths[$routeAction['uri']])) {
-				$pathItem = $this->openAPI->paths[$routeAction['uri']];
+			if (isset($this->openAPI->paths[$action['uri']])) {
+				$pathItem = $this->openAPI->paths[$action['uri']];
 			} else {
-				$pathItem = $this->openAPI->paths[$routeAction['uri']] = new PathItem();
+				$pathItem = $this->openAPI->paths[$action['uri']] = new PathItem();
 
-				if (!is_null($routeControllerDocBlock)) {
-					$pathItem->summary = $routeControllerDocBlock->getSummary();
+				if (!is_null($controllerDocBlock)) {
+					$pathItem->summary = $controllerDocBlock->getSummary();
 					if (empty($pathItem->summary)) {
 						$pathItem->summary = null;
 					}
-					$routeControllerDescriptionDocBlock = $routeControllerDocBlock->getDescription();
+					$routeControllerDescriptionDocBlock = $controllerDocBlock->getDescription();
 					$pathItem->description = $routeControllerDescriptionDocBlock->render();
 					if (empty($pathItem->description)) {
 						$pathItem->description = null;
@@ -171,7 +171,7 @@ abstract class Generator
 
 			$operation = new Operation();
 
-			$operationTags = $routeControllerOperationTags;
+			$operationTags = $controllerOperationTags;
 
 			$routeMethodDocBlock = $this->getRouteMethodDocBlock($route);
 			$extraParameterRefTags = [];
@@ -188,7 +188,7 @@ abstract class Generator
 				}
 				$routeMethodOperationTags = $this->getDocBlockOperationTags($routeMethodDocBlock);
 
-				$operationTags = array_merge($routeControllerOperationTags, $routeMethodOperationTags);
+				$operationTags = array_merge($controllerOperationTags, $routeMethodOperationTags);
 				$extraParameterRefTags = $this->getDocBlockExtraParameterRefTags($routeMethodDocBlock);
 
 				$operation->operationId = $this->getDocBlockOperationId($routeMethodDocBlock);
@@ -198,10 +198,10 @@ abstract class Generator
 				switch (strtolower($httpMethod)) {
 					case 'patch':
 					case 'put':
-						$operation->operationId = strtolower($httpMethod) . ucfirst(array_last(explode('.', $routeAction['as'])));
+						$operation->operationId = strtolower($httpMethod) . ucfirst(array_last(explode('.', $action['as'])));
 						break;
 					default :
-						$operation->operationId = array_last(explode('.', $routeAction['as']));
+						$operation->operationId = array_last(explode('.', $action['as']));
 				}
 			}
 
