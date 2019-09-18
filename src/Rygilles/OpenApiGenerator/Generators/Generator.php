@@ -139,22 +139,33 @@ abstract class Generator
 	{
 		$action = $route->getAction();
 
-		$this->getParentCommand()->info('Processing route [' . implode('/', $route->methods()) . '] ' . $action['uri']);
+		// Skip closures
+		if ($action['uses'] instanceof \Closure) {
+			$this->getParentCommand()->info('Skipping closure route');
+			return;
+		}
+
+		$routeUri = '/' . $route->uri();
+
+		$this->getParentCommand()->info('Processing route [' . implode('/', $route->methods()) . '] ' . $routeUri);
 
 		$controllerDocBlock = $this->getRouteControllerDocBlock($route);
+		if (is_null($controllerDocBlock)) {
+			$controllerDocBlock = new DocBlock;
+		}
+
 		$controllerOperationTags = $this->getDocBlockOperationTags($controllerDocBlock);
 
 		foreach ($route->methods() as $httpMethod) {
-			// Ignore HEAD
-
-			if (strtolower($httpMethod) === 'head') {
+			// Ignore HEAD and PATCH
+			if (in_array($httpMethod, ['HEAD', 'PATCH'])) {
 				continue;
 			}
 
-			if (isset($this->openAPI->paths[$action['uri']])) {
-				$pathItem = $this->openAPI->paths[$action['uri']];
+			if (isset($this->openAPI->paths[$routeUri])) {
+				$pathItem = $this->openAPI->paths[$routeUri];
 			} else {
-				$pathItem = $this->openAPI->paths[$action['uri']] = new PathItem();
+				$pathItem = $this->openAPI->paths[$routeUri] = new PathItem();
 
 				if (!is_null($controllerDocBlock)) {
 					$pathItem->summary = $controllerDocBlock->getSummary();
@@ -174,6 +185,10 @@ abstract class Generator
 			$operationTags = $controllerOperationTags;
 
 			$routeMethodDocBlock = $this->getRouteMethodDocBlock($route);
+			if (is_null($routeMethodDocBlock)) {
+				$routeMethodDocBlock = new DocBlock;
+			}
+
 			$extraParameterRefTags = [];
 
 			if (!is_null($routeMethodDocBlock)) {
@@ -201,7 +216,11 @@ abstract class Generator
 						$operation->operationId = strtolower($httpMethod) . ucfirst(array_last(explode('.', $action['as'])));
 						break;
 					default :
-						$operation->operationId = array_last(explode('.', $action['as']));
+						if (isset($action['as'])) {
+							$operation->operationId = $action['as'];
+						} else {
+							$operation->operationId = $action['uses'];
+						}
 				}
 			}
 
@@ -295,29 +314,14 @@ abstract class Generator
 
 						// Change to multi-part if file in parameters ("string" type and "binary" format)
 						$contentType = 'application/json';
-						
-						foreach ($routeValidationRules as $parameterName => $rulesString) {
-							$rules = explode('|', $rulesString);
-							$schema = $this->getPropertyValidationRulesSchema(
-								$rules,
-								'Validation rules for parameter "' . $parameterName . '"',
-								true
-							);
-							
-							// ignore this property if no type found
-							if (is_null($schema->type)) {
-								$this->getParentCommand()->warn('  Ignore parameter "' . $parameterName . '"');
-								continue;
-							}
-							
-							// Change to multi-part if file in parameters ("string" type and "binary" format)
-							if ($schema->type == 'string' && $schema->format == 'binary') {
-								$contentType = 'multipart/form-data';
-								// Change mediaType schema type
-								$mediaType->schema->type = 'object';
-							}
-							
-							$mediaType->schema->properties[$parameterName] = $schema;
+
+						$expandedRules = [];
+						foreach ($routeValidationRules as $key => $value) {
+							\Illuminate\Support\Arr::set($expandedRules, $key, $value);
+						}
+						 
+						foreach ($expandedRules as $parameterName => $rulesString) {
+							$newContentType = $this->getNestedPropertyValidationRulesSchema($mediaType->schema, $parameterName, $rulesString);
 						}
 
 						$mediaType->schema->required = $this->getValidationRulesSchemaRequired($routeValidationRules);
@@ -468,6 +472,42 @@ abstract class Generator
 		}
 	}
 
+	protected function getNestedPropertyValidationRulesSchema($baseSchema, $parameterName, $rulesString)
+	{
+		if (is_array($rulesString)) {
+			$schema = new Schema();
+			$schema->type = 'object';
+			foreach ($rulesString as $nestedName => $nestedRule) {
+				$this->getNestedPropertyValidationRulesSchema($schema, $nestedName, $nestedRule);
+			}
+			$baseSchema->properties[$parameterName] = $schema;
+			return;
+		}
+
+		$rules = explode('|', $rulesString);
+		$schema = $this->getPropertyValidationRulesSchema(
+			$rules,
+			'Validation rules for parameter "' . $parameterName . '"',
+			true
+		);
+		
+		// ignore this property if no type found
+		if (is_null($schema->type)) {
+			$this->getParentCommand()->warn('  Ignore parameter "' . $parameterName . '"');
+			return;
+		}
+
+		// Change to multi-part if file in parameters ("string" type and "binary" format)
+		if ($schema->type == 'string' && $schema->format == 'binary') {
+			// Change mediaType schema type
+			$baseSchema->type = 'object';
+		}
+		
+		$baseSchema->properties[$parameterName] = $schema;
+
+		return $contentType = 'multipart/form-data';;
+	}
+
 	/**
 	 * Return the OpenAPI Operation Id from a doc block or null if not found.
 	 *
@@ -587,6 +627,7 @@ abstract class Generator
 	protected function getPropertyValidationRulesSchema($propertyRules, $errorContext, $logCommandError = false)
 	{
 		$schema = new Schema();
+		$schema->type = 'string';
 
 		// Parse property rules to get format/schema
 		foreach ($propertyRules as $rule) {
@@ -691,6 +732,17 @@ abstract class Generator
 					$schema->type = 'string';
 					$schema->format = 'binary';
 					break;
+
+				case 'required':
+					$schema->required = true;
+					break;
+				
+				case 'nullable':
+					$schema->nullable = true;
+					break;
+
+				case 'sometimes':
+				    break;
 			}
 		}
 		
